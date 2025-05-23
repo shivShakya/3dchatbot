@@ -1,0 +1,132 @@
+import os
+import time
+from dotenv import load_dotenv
+from fastapi import FastAPI, Form, HTTPException, File, UploadFile , Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+from fastapi import UploadFile, File
+from fastapi.staticfiles import StaticFiles  
+
+load_dotenv()
+
+from taskfiles.authorization import authorize_function
+from taskfiles.rag import initialize_vectors_function
+#from taskfiles.llm import customize_conversation, customize_conversation_test
+from taskfiles.firebase import db
+from taskfiles.tts import useElavenlabsVoice
+
+from taskfiles.agent import customize_conversation
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+chat_history_manager = {}
+
+
+
+
+app = FastAPI()
+app.mount("/public", StaticFiles(directory="public"), name="public")
+app.mount("/assets", StaticFiles(directory="public/assets"), name="assets")
+
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    with open("public/index.html", "r") as f:
+        return f.read()
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class AuthorizeRequest(BaseModel):
+    id: str  
+    url: str
+
+@app.post("/authorize")
+async def authorize(request: AuthorizeRequest):
+    response = authorize_function(
+        id_param=request.id, 
+        url_param=request.url, 
+        db=db, 
+        chat_history_manager=chat_history_manager
+    )
+    if "error" in response:
+        raise HTTPException(status_code=500, detail=response["error"])
+    elif response.get("authorized") is False:
+        raise HTTPException(status_code=401, detail="Authorization failed")
+    return response
+
+
+@app.post("/initialize-vectors")
+async def initialize_vectors(
+    file: UploadFile = File(...),
+    web_url: str = Form(...)
+):
+    file_data = await file.read()
+    result = initialize_vectors_function(file_data, file.filename, web_url)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    
+    return JSONResponse(content=result)
+
+@app.post("/getVoice")
+async def get_voice(
+    request: Request,
+    transcript: str = Form(...),
+    vector_id: str = Form(...),
+    user_id: str = Form(...),
+    assistant_name: str = Form(...),
+    company_name: str = Form(...),
+):
+    try:
+        if await request.is_disconnected():
+            raise HTTPException(status_code=499, detail="Client disconnected")
+
+        if not vector_id:
+            return {"status": "failed", "message": "Vector ID is required"}
+        print({"vector": vector_id})
+        print({"text": transcript})
+        
+        
+
+@app.post("/testResponse")
+async def getResponse( transcript: str = Form(...)):
+    try:
+        print({"text": transcript})
+        
+        startTime = time.time()
+        response = await customize_conversation_test(
+            transcript + ".Answer in 15 words only.",
+        )
+
+      
+        print({'Response Timing' , time.time()-startTime})
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+      
+
+
+@app.get("/removeUserId")
+async def remove(user_id: str):
+    try:
+        if user_id in chat_history_manager:
+            del chat_history_manager[user_id]
+            return JSONResponse(content={"message": f"User {user_id} removed successfully."})
+        else:
+            return JSONResponse(content={"error": f"User {user_id} not found."}, status_code=404)
+    except Exception as e:
+        print(f"Error while removing user_id {user_id}: {str(e)}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("chat:app", host="0.0.0.0", port=8000, reload=True)

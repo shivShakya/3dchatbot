@@ -1,0 +1,20 @@
+# Secrets and credentials
+.env
+token.json
+credentials.json
+*.key
+*.pem
+secrets/
+.env
+credentials.json
+token.json
+keys.json
+*.keys
+*.json
+secrets/
+.env
+credentials.json
+token.json
+*.keys
+*.json
+secrets/

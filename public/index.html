@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D chatbot</title>
+    <link rel="stylesheet" href="/public/style.css">
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "./public/three/build/three.module.js"
+          }
+        }
+    </script>
+    <link rel="preload" href="assets/user_waveform1.gif" as="image">
+    <link rel="prefetch" href="assets/loader2.gif" as="image">
+    <link rel="prefetch" href="assets/pad2.png" as="image">
+</head>
+<body>
+    <video id="video" autoplay muted playsinline style="visibility: hidden; width: 0; height: 0;"></video>
+    <div id="intial-btn">
+        <img id="intial-img" src="assets/CHAT_BOT_2x.png" alt="intial"/>
+    </div>
+   <div id="box">
+          <div class="box" id="closeTab">
+               <div id="closeBtn">
+                    <img src="assets/close.png" style="width: 8vw;" alt="bot"/>
+              </div>
+          </div>
+          <div class="box" id="canvas-container">
+          </div>
+
+          <div class="fixed-button">
+            <img id="info-board" src="assets/info-board.png" alt="info-board"/>
+            <div id="btns">
+                <div class="btns-lap-1">
+                     <div id="btns-div-info" class="btns-div">
+                        <div class="btns-tag" id="info" >
+                            <img id="info-img" src="assets/chat.png" alt="info"/>
+                         </div>
+                     </div>
+                </div>
+                <div class="btns-lap" >
+                   <!-- <img id="background-pad" src="assets/floor.png" alt="pad"/> -->
+                      <div id="rounded-box"></div>
+                   <div id="info-pad">
+                       <div id="state-management" style="display: none; width: 80%;">
+                           <div id="wave">
+                                <img id="mic-overlay1" src="assets/user_waveform1.gif" style="display: none;" alt="bot" />
+                           </div>
+                           <div id="states" style="position: relative;">
+                                 <div>Listening...</div>
+                            </div>
+                       </div>
+                      <div id="btns-div-mic" class="btns-div">
+                         <div class="btns-tag" id="openBtn">
+                            <img id="mic" src="assets/micOpen.png" alt="chat"/>
+                         </div>
+                      </div>
+                   </div>
+               </div>
+            </div>
+        </div>
+
+   </div>
+
+
+    
+   <!--
+        <script src="https://cdn.jsdelivr.net/npm/fflate/umd/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/meshoptimizer/meshopt_decoder.js"></script>
+    <script src="./assets/files/WorkerPool.js"></script>
+    <script src="./assets/files/KTX2Loader.js"></script>
+   -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
+    <script type="module" src="/public/script.js"></script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+from datetime import datetime, timedelta
+from dateutil import parser
+import json
+import os
+from pprint import pprint
+import re
+from typing import Dict, Annotated
+import pytz
+from typing_extensions import TypedDict
+from langchain_core.messages import AIMessage, ToolMessage
+
+
+from langchain_community.vectorstores import FAISS
+from langchain.chains import ConversationalRetrievalChain
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
+from groq import Groq
+from langchain_core.prompts.chat import (
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    ChatPromptTemplate,
+)
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain.tools import tool
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+# node
+from taskfiles.Agent.Appointment_Booking import book_event_by_time , cancel_event_by_time 
+from taskfiles.Agent.Contact_Form import redirection_node, fillupTheContactPageDetails ,submitTheContactPageDetails
+from taskfiles.Agent.Story_Retrival import retrieval_node , datetime_node
+
+from taskfiles.Shared import State
+#from langchain_anthropic import ChatAnthropic
+#from langchain_google_genai import ChatGoogleGenerativeAI
+
+
+# ========== Setup LLM and Embeddings ==========
+groq_api_key = os.getenv("GROQ_API")
+anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
+client = Groq(api_key=groq_api_key)
+llm = ChatGroq(groq_api_key=groq_api_key, model_name="meta-llama/llama-4-maverick-17b-128e-instruct")
+#llm_anthropic = ChatAnthropic(model='claude-3-opus-20240229', api_key=anthropic_api_key)
+#llm_google = ChatGoogleGenerativeAI(model="gemini-1.5-pro",api_key=google_api_key, temperature=0.7)
+
+
+
+
+# ========== Graph Setup ==========
+tools = [retrieval_node , datetime_node, book_event_by_time , cancel_event_by_time, redirection_node, fillupTheContactPageDetails , submitTheContactPageDetails]
+#tools.extend(tools_cal)
+
+llm_with_tools = llm.bind_tools(tools=tools)
+
+
+def chatbot(state: State) -> Dict:
+    try:
+        response = llm_with_tools.invoke(state["messages"])
+    except Exception as e1:
+        print("Primary model failed in chatbot node:", str(e1))
+        try:
+            fallback1 = ChatGroq(groq_api_key=groq_api_key, model_name="meta-llama/llama-4-scout-17b-16e-instruct").bind_tools(tools=tools)
+            response = fallback1.invoke(state["messages"])
+        except Exception as e2:
+            print("Fallback 1 also failed:", str(e2))
+            try:
+                fallback2 = ChatGroq(groq_api_key=groq_api_key, model_name="llama3-70b-8192").bind_tools(tools=tools)
+                response = fallback2.invoke(state["messages"])
+            except Exception as e3:
+                print("Fallback 2 also failed:", str(e3))
+                raise RuntimeError("All LLM models failed in chatbot execution.")
+
+    redirection_info = state.get("redirection", "")
+    name_info = state.get("name", "")
+    email_info = state.get("email", "")
+    contact_message_info = state.get("contact_message", "")
+    contact_subject_info = state.get("contact_subject", "")
+    submitting_details_info = state.get("submitting_details", False)
+
+    messages = [response]
+
+    if redirection_info:
+        print(redirection_info)
+        messages.append(AIMessage(content=response.content, additional_kwargs={"redirection": redirection_info}))
+
+    if name_info and email_info and contact_message_info:
+        messages.append(AIMessage(content=response.content, additional_kwargs={
+            "name": name_info,
+            "email": email_info,
+            "contact_subject" : contact_subject_info,
+            "contact_message": contact_message_info
+        }))
+
+    if submitting_details_info:
+        messages.append(AIMessage(content=response.content, additional_kwargs={"submitting_details": True}))
+
+    return {"messages": messages}
+
+graphBuilder = StateGraph(State)
+graphBuilder.add_node("chatbot", chatbot)
+graphBuilder.add_edge(START, "chatbot")
+graphBuilder.add_node("tools", ToolNode(tools=tools))
+graphBuilder.add_conditional_edges("chatbot", tools_condition)
+graphBuilder.add_edge("tools", "chatbot")
+graphBuilder.add_edge("chatbot", END)
+
+
+memory = MemorySaver()
+graph = graphBuilder.compile(checkpointer=memory)
+
+
+async def customize_conversation(
+    chat_history_manager: Dict[str, Dict[str, list]],
+    vector_id: str,
+    user_id: str,
+    text: str,
+    assistant_name: str,
+    company_name: str
+):
+    try:
+        print("user id:", user_id)
+        print("vector id:", vector_id)
+
+        general_system_template = "<s>" + f"""
+You are {assistant_name}, an AI assistant from {company_name}.
+
+- You are warm, polite, and speak in a conversational, human-like tone. You may naturally use fillers like "hmm", "let me think", "yah", "okay", "sure thing", or "got it" to sound more realistic and relatable — but don't overuse them.
+- Be adaptive and engaging, as if you're in a casual yet professional chat. A bit of personality is encouraged — like gentle humor, reassurance, or empathy where appropriate.
+- You prefer using tools for answering factual or appointment-based queries.
+- You MUST use the `retrieval_node` tool for any question involving {company_name}, its founders, history, products, leadership, or factual info — even if you think you already know the answer.
+- Once a tool responds, summarize or explain the result clearly and casually to the user, like you're helping a friend or colleague.
+- If a user wants to book an appointment, ask for their name and email. Once they provide it, kindly repeat the email, name, and preferred time to confirm.
+-  use the `redirection_node`for redirecting user to different pages [`collaborate`, `home` , `clients`, `projects` `offerings`, `testimonial`, `process`].
+- if redirected to collaborate page, first fillup the form by calling "fillupTheContactPageDetails" tool when you get the name , email , and contact_message.
+-  Fill Up the contact_subject according to your message.
+   Format the message in proper way because user will not proivde complete message ,he will give you some hint only . Use the hints to structure the message well. 
+   if  Ask for confirmation once to check whether the filled information is correct or not. if yes move forward for submitting otherwise correct the info.
+ call `submitTheContactPageDetails` if all the details has been filled in the form such as name, email and contact_message .
+
+ Imp Point - Please dont mention about the technical tools I am telling to use in the response. It feels not okay.
+ -Use associated tools when required and dont give wrong information , information should be based on tools responses. """ + "</s>"
+
+        chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", general_system_template),
+            ("human", "{input}")
+        ])
+
+        formatted_messages = chat_prompt.format_messages(input=text)
+
+        initial_state = {
+            "messages": [
+                {"role": m.type, "content": m.content} for m in formatted_messages
+            ],
+            "name": "",
+            "email": "",
+            "vector_id": vector_id,
+            "redirection": "",   
+            "contact_message": "",    
+            "assistant_name": assistant_name,
+            "company_name": company_name,
+            "submitting_details" : False
+        }
+
+        config = RunnableConfig(
+            recursion_limit=20,
+            configurable={"thread_id": vector_id}
+        )
+
+        response_text = ""
+        redirection = ""
+        name = ""
+        email = ""
+        contact_message = ""
+        contact_subject = ""
+        submitting_details = False
+
+        for event in graph.stream(initial_state, config=config):
+           for val in event.values():
+              for message in val["messages"]:
+                  if hasattr(message, 'content') and message.content:
+                        response_text = message.content
+                  if hasattr(message, 'additional_kwargs'):
+                        redirection = message.additional_kwargs.get("redirection", "")
+                  if hasattr(message ,  'additional_kwargs'):
+                        name =  message.additional_kwargs.get("name", "")
+                        email =  message.additional_kwargs.get("email", "")
+                        contact_message =  message.additional_kwargs.get("contact_message", "")
+                        contact_subject = message.additional_kwargs.get("contact_subject", "")
+                  if hasattr(message ,  'additional_kwargs'):
+                        submitting_details = message.additional_kwargs.get("submitting_details", "")
+              val["messages"][-1].pretty_print()
+
+        return { "status": "success","message": response_text, "redirection": redirection, "name": name, "email": email ,"contact_subject" : contact_subject ,  "contact_message" : contact_message , "submitting_details" : submitting_details}
+    except Exception as e:
+        print("Error in customize_conversation:", str(e))
+        return {"status": "error", "message": str(e)}
+
+
+
+
+
+
+
+
